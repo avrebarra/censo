@@ -13,25 +13,36 @@ package main
 import (
 	"fmt"
 
-    "github.com/shrotavre/censo"
+	"github.com/shrotavre/censo"
 )
 
-type Dummy struct {
-	FieldA string
-	FieldB int
+type Parent struct {
+	FieldA int
+	FieldB string
 	FieldC string
+
+	First Child
+}
+
+type Child struct {
+	FieldA string
 }
 
 var censorship []censo.C = []censo.C{
-	censo.CBas("FieldB"),
-	censo.CSim("FieldA", "****"),
+	censo.CBas("FieldA"),
+	censo.CSim("FieldB", "****"),
+	censo.CSim("First/FieldA", "****"),
 }
 
 func main() {
-	data := Dummy{
-		FieldA: "real_value",
-		FieldB: 1234,
-		FieldC: "real_value",
+	data := Parent{
+		FieldA: 1234,
+		FieldB: "real_value",
+		FieldC: "kinda_real_value",
+
+		First: Child{
+			FieldA: "very_real_value",
+		},
 	}
 
 	err := censo.Censor(&data, censorship)
@@ -41,11 +52,12 @@ func main() {
 
 	fmt.Println("FieldA:", data.FieldA)
 	fmt.Println("FieldB:", data.FieldB)
-	fmt.Println("FieldC:", data.FieldC)
+	fmt.Println("First/FieldA:", data.First.FieldA)
 
 	// Outputs:
-	// FieldA: ****
-	// FieldB: 0
-	// FieldC: real_value
+	// FieldA: 0
+	// FieldB: ****
+	// First/FieldA: ****
 }
+
 ~~~

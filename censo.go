@@ -16,6 +16,9 @@ type C struct {
 	Placeholder interface{}
 }
 
+// CSet is set/array of C
+type CSet []C
+
 // CBas will create new basic censorship schema -> will set to null value of field
 func CBas(f string) (c C) {
 	return C{Field: f}
@@ -23,33 +26,86 @@ func CBas(f string) (c C) {
 
 // CSim will create new simple censorship schema
 func CSim(f string, p interface{}) (c C) {
-	return C{f, p}
+	return C{Field: f, Placeholder: p}
 }
 
 // Censor will censor matching schema in target and replace
-func Censor(target interface{}, schemas []C) (err error) {
+func Censor(target interface{}, set CSet) (err error) {
 	sv := reflect.ValueOf(target).Elem()
-	st := sv.Type()
+	cpmap := convertCSetToCPMap(set)
+
+	censor(sv, cpmap, "")
+
+	return
+}
+
+func censor(sv reflect.Value, cpmap map[string]interface{}, keyprefix string) {
+	// id := time.Now().UnixNano()
+	// fmt.Println("CENSOR", id, sv, sv.Kind())
 
 	if sv.Kind() == reflect.Struct {
-		for i := 0; i < st.NumField(); i++ {
-			fieldVal := sv.Field(i)
+		censorStruct(sv, cpmap, keyprefix)
+	} else if sv.Kind() == reflect.Map {
+		censorMap(sv, cpmap, keyprefix)
+	}
 
-			// Search field in schema list
-			for _, sch := range schemas {
-				if fieldVal.CanSet() && st.Field(i).Name == sch.Field {
-					rep := reflect.ValueOf(sch.Placeholder)
+	// fmt.Println("RESULT", id, sv)
+}
 
-					// check if replacement value matches as field's value's type
-					if sch.Placeholder != nil && rep.Type() == fieldVal.Type() {
-						fieldVal.Set(rep)
-					} else {
-						// set to zero value
-						fieldVal.Set(reflect.Zero(fieldVal.Type()))
-					}
-				}
+func censorStruct(sv reflect.Value, cpmap map[string]interface{}, keyprefix string) {
+	st := sv.Type()
+
+	for i := 0; i < st.NumField(); i++ {
+		cpkey := keyprefix + st.Field(i).Name
+
+		fieldVal := sv.Field(i)
+		placeholder, found := cpmap[cpkey]
+
+		if fieldVal.Kind() == reflect.Struct || fieldVal.Kind() == reflect.Map {
+			censor(fieldVal, cpmap, cpkey+"/")
+		} else if fieldVal.CanSet() && found {
+			rep := reflect.ValueOf(placeholder)
+
+			// check if replacement value matches as field's value's type
+			if placeholder != nil && rep.Type() == fieldVal.Type() {
+				fieldVal.Set(rep)
+			} else { // set to zero value
+				fieldVal.Set(reflect.Zero(fieldVal.Type()))
 			}
 		}
 	}
-	return
+}
+
+func censorMap(sv reflect.Value, cpmap map[string]interface{}, keyprefix string) {
+	// fmt.Println("  MAP", sv)
+	// fmt.Println("  MAP", cpmap)
+	for _, fname := range sv.MapKeys() {
+		cpkey := keyprefix + fname.String()
+
+		fieldVal := sv.MapIndex(fname)
+
+		placeholder, found := cpmap[cpkey]
+		placeholderv := reflect.ValueOf(placeholder)
+
+		// fmt.Println("   K", fname, cpkey)
+		// fmt.Println(fieldVal.Elem().Kind())
+		// fmt.Println()
+
+		if (fieldVal.Elem().Kind() == reflect.Struct || fieldVal.Elem().Kind() == reflect.Map) && !found {
+			censor(fieldVal.Elem(), cpmap, cpkey+"/")
+			continue
+		}
+
+		if !found {
+			continue
+		}
+
+		// replace orig data with C
+		if placeholder != nil && (placeholderv.Type() == fieldVal.Elem().Type() || placeholderv.Type().ConvertibleTo(fieldVal.Type())) {
+			fv := placeholderv.Convert(fieldVal.Elem().Type())
+			sv.SetMapIndex(fname, fv)
+		} else { // set to zero value
+			sv.SetMapIndex(fname, reflect.Zero(fieldVal.Elem().Type()))
+		}
+	}
 }

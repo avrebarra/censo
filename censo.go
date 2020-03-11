@@ -55,8 +55,14 @@ func PowerCensor(target interface{}, cf func(fieldname string, fieldval interfac
 }
 
 func censor(sv reflect.Value, cfpmap CFPMap, keyprefix string) (err error) {
-	switch sv.Kind() {
+	// try to cast interfaces to map[string]interface
+	v, ok := sv.Interface().(map[string]interface{})
+	if ok {
+		sv = reflect.ValueOf(v)
+	}
 
+	// perform censoring
+	switch sv.Kind() {
 	case reflect.Struct:
 		err = censorStruct(sv, cfpmap, keyprefix)
 		return

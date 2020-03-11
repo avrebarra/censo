@@ -6,106 +6,178 @@ import (
 
 // This package uses Go's reflections https://blog.golang.org/laws-of-reflection
 // It's not bcs anybody are tired, reflections is actually hard to comprehend
-// it is normal. It's better not to use reflection anywhere, not transparent.
+// it is normal.
+//
+// Lets be fair it's better not to use reflection anywhere, it's not transparent
 
-// TODO: implement deep matching + check for possible panics sources
+const (
+	universalFieldMatcherSign = "*"
+)
 
-// C represent censorship schema
+// C represent Censo's censorship schema
 type C struct {
-	Field       string
-	Placeholder interface{}
+	Field       string      // Field defines what field name to apply censor
+	Placeholder interface{} // Placeholder defines value to replace orig value
 }
 
 // CSet is set/array of C
 type CSet []C
 
-// CBas will create new basic censorship schema -> will set to null value of field
-func CBas(f string) (c C) {
-	return C{Field: f}
-}
+// CFPMap is a mapping of field name (string) to placeholder/replacer object
+type CFPMap map[string]interface{}
 
-// CSim will create new simple censorship schema
-func CSim(f string, p interface{}) (c C) {
-	return C{Field: f, Placeholder: p}
-}
-
-// Censor will censor matching schema in target and replace
+// Censor will censor matching schema in target and replace with defined placeh
+// older value.
+// This func was designed as ignorant func. It doesn't actually care/doesnt halt
+// processing even if any error happened. Worst case happened, the original data
+// would not be touched at all (even if error happened).
 func Censor(target interface{}, set CSet) (err error) {
-	sv := reflect.ValueOf(target).Elem()
-	cpmap := convertCSetToCPMap(set)
-
-	censor(sv, cpmap, "")
-
-	return
+	return censor(
+		reflect.ValueOf(target).Elem(),
+		CSetToCPMap(set),
+		"",
+	)
 }
 
-func censor(sv reflect.Value, cpmap map[string]interface{}, keyprefix string) {
-	// id := time.Now().UnixNano()
-	// fmt.Println("CENSOR", id, sv, sv.Kind())
-
-	if sv.Kind() == reflect.Struct {
-		censorStruct(sv, cpmap, keyprefix)
-	} else if sv.Kind() == reflect.Map {
-		censorMap(sv, cpmap, keyprefix)
+// PowerCensor let you censor data and decide by yourself what censor strategy
+// to apply depending on field name + field value.
+func PowerCensor(target interface{}, cf func(fieldname string, fieldval interface{}) (placeholder interface{})) (err error) {
+	powerC := C{
+		Field:       universalFieldMatcherSign,
+		Placeholder: cf,
 	}
 
-	// fmt.Println("RESULT", id, sv)
+	return censor(
+		reflect.ValueOf(target).Elem(),
+		CSetToCPMap([]C{powerC}),
+		"",
+	)
 }
 
-func censorStruct(sv reflect.Value, cpmap map[string]interface{}, keyprefix string) {
+func censor(sv reflect.Value, cfpmap CFPMap, keyprefix string) (err error) {
+	switch sv.Kind() {
+
+	case reflect.Struct:
+		err = censorStruct(sv, cfpmap, keyprefix)
+		return
+
+	case reflect.Map:
+		_, ok := sv.Interface().(map[string]interface{})
+		if !ok {
+			return ErrNotCensorable
+		}
+		err = censorMap(sv, cfpmap, keyprefix)
+		return
+
+	default:
+		return ErrNotCensorable
+
+	}
+}
+
+func censorStruct(sv reflect.Value, cfpmap CFPMap, keyprefix string) (err error) {
 	st := sv.Type()
 
 	for i := 0; i < st.NumField(); i++ {
-		cpkey := keyprefix + st.Field(i).Name
+		// decide key to search in cfp
+		cfpkey := keyprefix + st.Field(i).Name
 
+		// fetch original field value
 		fieldVal := sv.Field(i)
-		placeholder, found := cpmap[cpkey]
 
+		// if field value is map/struct do recursive process
 		if fieldVal.Kind() == reflect.Struct || fieldVal.Kind() == reflect.Map {
-			censor(fieldVal, cpmap, cpkey+"/")
-		} else if fieldVal.CanSet() && found {
+			censor(fieldVal, cfpmap, cfpkey+"/")
+			continue
+		}
+
+		// fetch placeholder value
+		placeholder, cfpkeyfound := cfpmap[cfpkey]
+		if !cfpkeyfound {
+			placeholder, cfpkeyfound = cfpmap[universalFieldMatcherSign]
+		}
+		if !cfpkeyfound {
+			continue // if cfpkey or universal not listed, skip field
+		}
+		placeholderv := reflect.ValueOf(placeholder)
+
+		// if placeholder is a replacerfunc, create placeholder first
+		if placeholderv.Kind() == reflect.Func {
+			if powerfunc, ok := placeholder.(func(fieldname string, fieldval interface{}) (placeholder interface{})); ok {
+				placeholder = powerfunc(cfpkey, fieldVal.Interface())
+				placeholderv = reflect.ValueOf(placeholder)
+			} else if placeholderfunc, ok := placeholder.(func(i interface{}) (o interface{})); ok {
+				placeholder = placeholderfunc(fieldVal.Interface())
+				placeholderv = reflect.ValueOf(placeholder)
+			} else {
+				continue
+			}
+		}
+
+		// replace orig data with placeholder
+		if fieldVal.CanSet() {
 			rep := reflect.ValueOf(placeholder)
 
-			// check if replacement value matches as field's value's type
 			if placeholder != nil && rep.Type() == fieldVal.Type() {
+				// direct set if replacement matches original value's type
 				fieldVal.Set(rep)
-			} else { // set to zero value
+			} else {
+				// set to zero value
 				fieldVal.Set(reflect.Zero(fieldVal.Type()))
 			}
 		}
 	}
+
+	return
 }
 
-func censorMap(sv reflect.Value, cpmap map[string]interface{}, keyprefix string) {
-	// fmt.Println("  MAP", sv)
-	// fmt.Println("  MAP", cpmap)
+func censorMap(sv reflect.Value, cfpmap CFPMap, keyprefix string) (err error) {
 	for _, fname := range sv.MapKeys() {
-		cpkey := keyprefix + fname.String()
+		// decide key to search in cfp
+		cfpkey := keyprefix + fname.String()
 
+		// fetch original field value
 		fieldVal := sv.MapIndex(fname)
 
-		placeholder, found := cpmap[cpkey]
+		// if field value is map/struct do recursive process
+		if fieldVal.Elem().Kind() == reflect.Struct || fieldVal.Elem().Kind() == reflect.Map {
+			censor(fieldVal.Elem(), cfpmap, cfpkey+"/")
+			continue
+		}
+
+		// fetch placeholder value
+		placeholder, cfpkeyfound := cfpmap[cfpkey]
+		if !cfpkeyfound {
+			placeholder, cfpkeyfound = cfpmap[universalFieldMatcherSign]
+		}
+		if !cfpkeyfound {
+			continue // if cfpkey or universal not listed, skip field
+		}
 		placeholderv := reflect.ValueOf(placeholder)
 
-		// fmt.Println("   K", fname, cpkey)
-		// fmt.Println(fieldVal.Elem().Kind())
-		// fmt.Println()
-
-		if (fieldVal.Elem().Kind() == reflect.Struct || fieldVal.Elem().Kind() == reflect.Map) && !found {
-			censor(fieldVal.Elem(), cpmap, cpkey+"/")
-			continue
+		// if placeholder is a replacerfunc, create placeholder first
+		if placeholderv.Kind() == reflect.Func {
+			if powerfunc, ok := placeholder.(func(fieldname string, fieldval interface{}) (placeholder interface{})); ok {
+				placeholder = powerfunc(cfpkey, fieldVal.Interface())
+				placeholderv = reflect.ValueOf(placeholder)
+			} else if placeholderfunc, ok := placeholder.(func(i interface{}) (o interface{})); ok {
+				placeholder = placeholderfunc(fieldVal.Interface())
+				placeholderv = reflect.ValueOf(placeholder)
+			} else {
+				continue
+			}
 		}
 
-		if !found {
-			continue
-		}
-
-		// replace orig data with C
+		// replace orig data with placeholder
 		if placeholder != nil && (placeholderv.Type() == fieldVal.Elem().Type() || placeholderv.Type().ConvertibleTo(fieldVal.Type())) {
+			// replace with value if applicable
 			fv := placeholderv.Convert(fieldVal.Elem().Type())
 			sv.SetMapIndex(fname, fv)
-		} else { // set to zero value
+		} else {
+			// set to zero value if not applicable or not defined
 			sv.SetMapIndex(fname, reflect.Zero(fieldVal.Elem().Type()))
 		}
 	}
+
+	return
 }

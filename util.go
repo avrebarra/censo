@@ -1,10 +1,10 @@
 package censo
 
-func convertCSetToCPMap(c []C) (cpmap map[string]interface{}) {
-	cpmap = map[string]interface{}{}
+func CSetToCPMap(c []C) (cfpmap CFPMap) {
+	cfpmap = CFPMap{}
 
 	for _, entry := range c {
-		cpmap[entry.Field] = entry.Placeholder
+		cfpmap[entry.Field] = entry.Placeholder
 	}
 
 	return

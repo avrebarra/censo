@@ -4,103 +4,109 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/shrotavre/censo"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/shrotavre/censo"
 )
 
 type Dummy struct {
 	FieldA string
-	FieldB int
-	FieldC DummyDeep
+	FieldB string
+	FieldC int
 	FieldD int
+	FieldE DummyDeep
 }
 
 type DummyDeep struct {
 	DeepFieldD string
 }
 
-func TestCensorStruct(t *testing.T) {
-	t.Run("ok", func(t *testing.T) {
-		// arrange
-		schemas := []censo.C{
-			censo.CSim("FieldC/DeepFieldD", "X"),
-			censo.CBas("FieldB"),
-			censo.CSim("FieldA", "X"),
-		}
+func TestCensor(t *testing.T) {
+	schema := []censo.C{}
 
+	t.Run("ok_universal_field_sign", func(t *testing.T) {
+		// arrange
+		schema := []censo.C{censo.CSim("*", "X")}
 		target := Dummy{
 			FieldA: "real_value",
-			FieldB: 1234,
-			FieldC: DummyDeep{DeepFieldD: "real_value"},
-			FieldD: 1234,
+			FieldC: 1234,
+			FieldE: DummyDeep{
+				DeepFieldD: "real_deep_value",
+			},
 		}
 
 		// act
-		// st := time.Now()
-		err := censo.Censor(&target, schemas)
-		// fmt.Println("str", time.Since(st))
+		err := censo.Censor(&target, schema)
 
 		// assert
 		assert.Nil(t, err)
 		assert.Equal(t, "X", target.FieldA)
-		assert.Equal(t, 0, target.FieldB)
-		assert.Equal(t, "X", target.FieldC.DeepFieldD)
-		assert.Equal(t, 1234, target.FieldD)
+		assert.Equal(t, "X", target.FieldE.DeepFieldD)
+		assert.Equal(t, 0, target.FieldC)
+	})
+
+	t.Run("err_type_map_invalid", func(t *testing.T) {
+		// arrange
+		var target map[int]interface{}
+
+		// act
+		err := censo.Censor(&target, schema)
+
+		// assert
+		assert.NotNil(t, err)
+		assert.Equal(t, censo.ErrNotCensorable, err)
 	})
 }
 
-func TestCensorJSON(t *testing.T) {
-	t.Run("ok_basic", func(t *testing.T) {
-		// arrange
-		jsontarget := `{"FieldA":"real_value","FieldB":1234,"FieldC":{"DeepFieldD":"real_value"},"FieldD":1234}`
-		schemas := []censo.C{
-			censo.CBas("FieldC/DeepFieldD"),
-			censo.CBas("FieldB"),
-			censo.CBas("FieldA"),
+func TestPowerCensor(t *testing.T) {
+	powerfunc := func(fieldname string, fieldval interface{}) (placeholder interface{}) {
+		placeholder = fieldval
+
+		if _, ok := placeholder.(string); ok {
+			placeholder = fieldname
+		} else if _, ok := placeholder.(int); ok {
+			placeholder = 9999
 		}
-		var jsonobjtarget map[string]interface{}
-		err := json.Unmarshal([]byte(jsontarget), &jsonobjtarget)
-		assert.NoError(t, err)
+
+		return
+	}
+
+	t.Run("ok_type_struct", func(t *testing.T) {
+		// arrange
+		target := Dummy{
+			FieldA: "real_value",
+			FieldC: 1234,
+			FieldE: DummyDeep{
+				DeepFieldD: "real_deep_value",
+			},
+		}
 
 		// act
-		// st := time.Now()
-		err = censo.Censor(&jsonobjtarget, schemas)
-		child, childok := jsonobjtarget["FieldC"].(map[string]interface{})
-		// fmt.Println("json", time.Since(st))
+		err := censo.PowerCensor(&target, powerfunc)
 
 		// assert
 		assert.Nil(t, err)
-		assert.True(t, childok)
-		assert.EqualValues(t, "", jsonobjtarget["FieldA"])
-		assert.EqualValues(t, 0, jsonobjtarget["FieldB"])
-		assert.EqualValues(t, 1234, jsonobjtarget["FieldD"])
-		assert.EqualValues(t, "", child["DeepFieldD"])
+		assert.Equal(t, "FieldA", target.FieldA)
+		assert.Equal(t, "FieldE/DeepFieldD", target.FieldE.DeepFieldD)
+		assert.Equal(t, 9999, target.FieldC)
 	})
 
-	t.Run("ok_simple", func(t *testing.T) {
+	t.Run("ok_type_map", func(t *testing.T) {
 		// arrange
-		jsontarget := `{"FieldA":"real_value","FieldB":1234,"FieldC":{"DeepFieldD":"real_value"},"FieldD":1234}`
-		schemas := []censo.C{
-			censo.CSim("FieldC/DeepFieldD", "X"),
-			censo.CSim("FieldB", 999),
-			censo.CSim("FieldA", "X"),
-		}
-		var jsonobjtarget map[string]interface{}
-		err := json.Unmarshal([]byte(jsontarget), &jsonobjtarget)
-		assert.NoError(t, err)
+		jsontarget := `{"FieldA":"real_value","FieldE":{"DeepFieldD":"real_deep_value"}}`
+
+		var target map[string]interface{}
+		err := json.Unmarshal([]byte(jsontarget), &target)
+		require.NoError(t, err)
 
 		// act
-		// st := time.Now()
-		err = censo.Censor(&jsonobjtarget, schemas)
-		child, childok := jsonobjtarget["FieldC"].(map[string]interface{})
-		// fmt.Println("json", time.Since(st))
+		err = censo.PowerCensor(&target, powerfunc)
+		child, ok := target["FieldE"].(map[string]interface{})
+		require.True(t, ok)
 
 		// assert
 		assert.Nil(t, err)
-		assert.True(t, childok)
-		assert.EqualValues(t, "X", jsonobjtarget["FieldA"])
-		assert.EqualValues(t, 999, jsonobjtarget["FieldB"])
-		assert.EqualValues(t, 1234, jsonobjtarget["FieldD"])
-		assert.EqualValues(t, "X", child["DeepFieldD"])
+		assert.Equal(t, "FieldE/DeepFieldD", child["DeepFieldD"])
+		assert.Equal(t, "FieldA", target["FieldA"])
 	})
 }

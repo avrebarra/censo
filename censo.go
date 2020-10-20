@@ -1,8 +1,13 @@
 package censo
 
 import (
+	"fmt"
 	"reflect"
 )
+
+// ErrNotCensorable is returned when censo is used to censor unsupported or
+// unknown data types.
+var ErrNotCensorable = fmt.Errorf("type not censorable")
 
 // This package uses Go's reflections https://blog.golang.org/laws-of-reflection
 // It's not bcs anybody are tired, reflections is actually hard to comprehend
@@ -32,6 +37,12 @@ type CFPMap map[string]interface{}
 // processing even if any error happened. Worst case happened, the original data
 // would not be touched at all (even if error happened).
 func Censor(target interface{}, set CSet) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("censoring failed: %s", r)
+		}
+	}()
+
 	return censor(
 		reflect.ValueOf(target).Elem(),
 		CSetToCPMap(set),
@@ -183,6 +194,16 @@ func censorMap(sv reflect.Value, cfpmap CFPMap, keyprefix string) (err error) {
 			// set to zero value if not applicable or not defined
 			sv.SetMapIndex(fname, reflect.Zero(fieldVal.Elem().Type()))
 		}
+	}
+
+	return
+}
+
+func CSetToCPMap(c []C) (cfpmap CFPMap) {
+	cfpmap = CFPMap{}
+
+	for _, entry := range c {
+		cfpmap[entry.Field] = entry.Placeholder
 	}
 
 	return

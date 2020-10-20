@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shrotavre/censo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/shrotavre/censo"
 )
 
 func TestCensorCBas(t *testing.T) {
